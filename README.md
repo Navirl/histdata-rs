@@ -1,0 +1,42 @@
+# histdata
+
+Download free FX historical data (1-minute bars and ticks) from [HistData.com](https://www.histdata.com).
+
+A Rust port of the Python [`histdata`](https://github.com/philipperemy/FX-1-Minute-Data) package by Philippe Remy.
+File names and the HTTP exchange match the upstream `master` branch.
+
+```rust,no_run
+use histdata::{Downloader, Period, Platform, Request, TimeFrame};
+
+#[tokio::main]
+async fn main() -> histdata::Result<()> {
+    let downloader = Downloader::new("data");
+
+    // Past years of 1-minute data are served per year...
+    downloader.download(&Request::new("eurusd", Period::Year(2019))).await?;
+
+    // ...and the current year per month.
+    downloader
+        .download(&Request::new("eurusd", Period::Month { year: 2026, month: 9 }))
+        .await?;
+
+    // Tick data (NinjaTrader bid quotes)
+    let request = Request::new("usdjpy", Period::Month { year: 2019, month: 6 })
+        .time_frame(TimeFrame::TickBid)
+        .platform(Platform::NinjaTrader);
+    downloader.download(&request).await?;
+    Ok(())
+}
+```
+
+- An existing file with the same name is returned without downloading again.
+- Non-ZIP responses are rejected (`Error::NotZip`) and nothing is written.
+- Known pairs and their first trading month are in [`pairs.csv`](pairs.csv), embedded at build time
+  (`histdata::pairs()`).
+
+Data timestamps are EST without daylight saving time. Please respect HistData.com's terms of use.
+
+## License
+
+Apache-2.0. This crate is derived from [philipperemy/FX-1-Minute-Data](https://github.com/philipperemy/FX-1-Minute-Data)
+(Apache-2.0), including `pairs.csv`.
