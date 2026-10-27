@@ -20,7 +20,10 @@ mod error;
 pub mod pairs;
 mod types;
 
-pub use download::{DEFAULT_BASE_URL, Downloader};
+pub use download::{
+    DEFAULT_BASE_URL, DEFAULT_REQUEST_INTERVAL, DEFAULT_RETRIES, DEFAULT_RETRY_DELAY, Downloader,
+    Progress,
+};
 pub use error::{Error, Result};
 pub use pairs::{PairInfo, pair_info, pairs};
 pub use types::{

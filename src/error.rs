@@ -14,7 +14,7 @@ pub enum Error {
     #[error("無効な期間指定です: {0}")]
     InvalidPeriod(&'static str),
 
-    /// ダウンロードページの GET が 200 以外を返した。
+    /// ダウンロードページの GET が 200 以外を返した。`get.php` が 429 か 5xx を返したときも。
     #[error("www.histdata.com から 200 以外の応答がありました (status={status})")]
     SiteUnavailable { status: reqwest::StatusCode },
 
@@ -35,6 +35,19 @@ pub enum Error {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+impl Error {
+    /// 時間をおけば成功しうる失敗か（通信エラー、429、5xx）。
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Error::SiteUnavailable { status } => {
+                status.is_server_error() || *status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            }
+            Error::Http(e) => e.is_timeout() || e.is_connect() || e.is_request() || e.is_body(),
+            _ => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

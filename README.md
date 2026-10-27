@@ -30,6 +30,11 @@ async fn main() -> histdata::Result<()> {
 ```
 
 - An existing file with the same name is returned without downloading again.
+- To go easy on the site, downloads start at least 1 second apart, and network errors, 429 and 5xx
+  are retried up to 3 times with a doubling delay starting at 1 second
+  (`with_request_interval`, `with_retries`, `with_retry_delay`). Clones of a `Downloader` share
+  the interval.
+- `download_all` downloads several requests in order and reports progress through a callback.
 - Non-ZIP responses are rejected (`Error::NotZip`) and nothing is written.
 - Known pairs and their first trading month are in [`pairs.csv`](pairs.csv), embedded at build time
   (`histdata::pairs()`).

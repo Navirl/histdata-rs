@@ -1,4 +1,6 @@
-use histdata::{Downloader, Error, Period, Platform, Request, TimeFrame};
+use std::time::{Duration, Instant};
+
+use histdata::{Downloader, Error, Period, Platform, Progress, Request, TimeFrame};
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, Request as MockRequest, ResponseTemplate};
 
@@ -187,7 +189,9 @@ async fn reports_site_errors() {
     let dir = tempfile::tempdir().unwrap();
     let downloader = Downloader::new(dir.path())
         .with_base_url(server.uri())
-        .with_current_year(2026);
+        .with_current_year(2026)
+        .with_retries(0)
+        .with_request_interval(Duration::ZERO);
     let downloader = &downloader;
     let download = |year| async move {
         downloader
@@ -205,6 +209,196 @@ async fn reports_site_errors() {
 
     // 失敗したときは何も残さない
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+/// `year` のページと POST の両方に ZIP を返すモックを置く
+async fn mount_year(server: &MockServer, year: i32) {
+    let query: &'static str = format!("/ascii/1-minute-bar-quotes/eurusd/{year}").leak();
+    mount_page(server, query, TOKEN_PAGE).await;
+    Mock::given(method("POST"))
+        .and(body_string_contains(format!("date={year}&")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(ZIP_BODY))
+        .mount(server)
+        .await;
+}
+
+fn quick_downloader(dir: &std::path::Path, server: &MockServer) -> Downloader {
+    Downloader::new(dir)
+        .with_base_url(server.uri())
+        .with_current_year(2026)
+        .with_retry_delay(Duration::from_millis(10))
+        .with_request_interval(Duration::ZERO)
+}
+
+#[tokio::test]
+async fn retries_transient_failures() {
+    let server = MockServer::start().await;
+    // 最初の 2 回は 503、3 回目でページが返る
+    Mock::given(method("GET"))
+        .and(page_query("/ascii/1-minute-bar-quotes/eurusd/2019"))
+        .respond_with(ResponseTemplate::new(503))
+        .up_to_n_times(2)
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_year(&server, 2019).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = quick_downloader(dir.path(), &server)
+        .with_retries(2)
+        .download(&Request::new("eurusd", Period::Year(2019)))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), ZIP_BODY);
+}
+
+#[tokio::test]
+async fn retries_server_errors_on_post() {
+    let server = MockServer::start().await;
+    mount_page(
+        &server,
+        "/ascii/1-minute-bar-quotes/eurusd/2019",
+        TOKEN_PAGE,
+    )
+    .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(429))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(ZIP_BODY))
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = quick_downloader(dir.path(), &server)
+        .download(&Request::new("eurusd", Period::Year(2019)))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), ZIP_BODY);
+}
+
+#[tokio::test]
+async fn gives_up_after_retries() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(3)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let err = quick_downloader(dir.path(), &server)
+        .with_retries(2)
+        .with_retry_delay(Duration::from_millis(100))
+        .download(&Request::new("eurusd", Period::Year(2019)))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::SiteUnavailable { .. }), "{err:?}");
+    // 待ち時間は 100ms → 200ms と倍になる
+    assert!(
+        started.elapsed() >= Duration::from_millis(300),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn does_not_retry_permanent_failures() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<html>no token</html>"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let err = quick_downloader(dir.path(), &server)
+        .download(&Request::new("eurusd", Period::Year(2019)))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::TokenNotFound), "{err:?}");
+}
+
+#[tokio::test]
+async fn spaces_out_downloads() {
+    let server = MockServer::start().await;
+    mount_year(&server, 2018).await;
+    mount_year(&server, 2019).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    // 保存済みのファイルはサイトに取りに行かないので待たない
+    std::fs::write(dir.path().join("DAT_ASCII_EURUSD_M1_2017.zip"), b"cached").unwrap();
+    let downloader =
+        quick_downloader(dir.path(), &server).with_request_interval(Duration::from_millis(300));
+    // clone しても間隔は共有する
+    let other = downloader.clone();
+
+    let started = Instant::now();
+    downloader
+        .download(&Request::new("eurusd", Period::Year(2017)))
+        .await
+        .unwrap();
+    downloader
+        .download(&Request::new("eurusd", Period::Year(2018)))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(300),
+        "{:?}",
+        started.elapsed()
+    );
+    other
+        .download(&Request::new("eurusd", Period::Year(2019)))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(300),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn download_all_reports_progress() {
+    let server = MockServer::start().await;
+    mount_year(&server, 2018).await;
+    mount_year(&server, 2019).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let requests = [
+        Request::new("eurusd", Period::Year(2018)),
+        Request::new("eurusd", Period::Year(2019)),
+    ];
+    let mut events = Vec::new();
+    let paths = quick_downloader(dir.path(), &server)
+        .download_all(&requests, |p| events.push(p))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        paths,
+        [
+            dir.path().join("DAT_ASCII_EURUSD_M1_2018.zip"),
+            dir.path().join("DAT_ASCII_EURUSD_M1_2019.zip"),
+        ]
+    );
+    let progress = |done, file_name: &str| Progress {
+        done,
+        total: 2,
+        file_name: file_name.to_string(),
+    };
+    assert_eq!(
+        events,
+        [
+            progress(0, "DAT_ASCII_EURUSD_M1_2018.zip"),
+            progress(1, "DAT_ASCII_EURUSD_M1_2019.zip"),
+            progress(2, ""),
+        ]
+    );
 }
 
 /// 実サイトに接続する。`cargo test -- --ignored` で実行。
