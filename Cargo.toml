@@ -1,6 +1,6 @@
 [package]
 name = "histdata"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Download FX historical data from HistData.com (Rust port of the Python histdata package)"
 license = "Apache-2.0"
