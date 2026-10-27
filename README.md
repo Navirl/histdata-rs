@@ -1,4 +1,4 @@
-# histdata-rs
+# histdata
 
 Download free FX historical data (1-minute bars and ticks) from [HistData.com](https://www.histdata.com).
 
@@ -6,10 +6,10 @@ A Rust port of the Python [`histdata`](https://github.com/philipperemy/FX-1-Minu
 File names and the HTTP exchange match the upstream `master` branch.
 
 ```rust,no_run
-use histdata_rs::{Downloader, Period, Platform, Request, TimeFrame};
+use histdata::{Downloader, Period, Platform, Request, TimeFrame};
 
 #[tokio::main]
-async fn main() -> histdata_rs::Result<()> {
+async fn main() -> histdata::Result<()> {
     let downloader = Downloader::new("data");
 
     // Past years of 1-minute data are served per year...
@@ -32,7 +32,7 @@ async fn main() -> histdata_rs::Result<()> {
 - An existing file with the same name is returned without downloading again.
 - Non-ZIP responses are rejected (`Error::NotZip`) and nothing is written.
 - Known pairs and their first trading month are in [`pairs.csv`](pairs.csv), embedded at build time
-  (`histdata_rs::pairs()`).
+  (`histdata::pairs()`).
 
 Data timestamps are EST without daylight saving time. Please respect HistData.com's terms of use.
 
