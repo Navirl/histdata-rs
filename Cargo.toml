@@ -1,5 +1,5 @@
 [package]
-name = "histdata"
+name = "histdata-rs"
 version = "0.1.0"
 edition = "2024"
 description = "Download FX historical data from HistData.com (Rust port of the Python histdata package)"

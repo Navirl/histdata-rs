@@ -6,7 +6,7 @@
 //! cargo run --example download -- eurusd 2026 9 data
 //! ```
 
-use histdata::{Downloader, Period, Request};
+use histdata_rs::{Downloader, Period, Request};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
