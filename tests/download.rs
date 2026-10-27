@@ -1,4 +1,4 @@
-use histdata::{Downloader, Error, Period, Platform, Request, TimeFrame};
+use histdata_rs::{Downloader, Error, Period, Platform, Request, TimeFrame};
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, Request as MockRequest, ResponseTemplate};
 
