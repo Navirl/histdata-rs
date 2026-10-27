@@ -4,9 +4,9 @@
 //! 保存されるファイル名と HTTP のやり取りは GitHub master 版と同じ。
 //!
 //! ```no_run
-//! use histdata_rs::{Downloader, Period, Request};
+//! use histdata::{Downloader, Period, Request};
 //!
-//! # async fn run() -> histdata_rs::Result<()> {
+//! # async fn run() -> histdata::Result<()> {
 //! let downloader = Downloader::new("data");
 //! // 過去年の 1 分足は年単位、今年の 1 分足は月単位で取得する
 //! let path = downloader.download(&Request::new("eurusd", Period::Year(2019))).await?;
