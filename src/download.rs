@@ -55,6 +55,8 @@ pub struct Downloader {
 impl Downloader {
     /// `output_dir` に保存する Downloader を作る。
     pub fn new(output_dir: impl Into<PathBuf>) -> Self {
+        // TLS の暗号実装に ring を使う。既に入っていれば何もしない
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let client = reqwest::Client::builder()
             .user_agent(concat!("histdata-rs/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -261,16 +263,68 @@ fn post_headers(referer: &reqwest::Url) -> HeaderMap {
 }
 
 /// ダウンロードページの `<input id="tk">` の値。無いか空なら `None`。
+///
+/// HTML パーサーは使わず、`<input` タグを順に見て `id="tk"` のタグの `value` を取る。
+/// タグ名・属性名の大文字小文字、属性の順序、引用符（`"`・`'`・なし）の違いを許す。
 fn extract_token(html: &str) -> Option<String> {
-    let document = scraper::Html::parse_document(html);
-    let selector = scraper::Selector::parse("input#tk").unwrap();
-    document
-        .select(&selector)
-        .next()?
-        .value()
-        .attr("value")
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("<input") {
+        let start = from + pos + "<input".len();
+        let end = lower[start..].find('>').map_or(lower.len(), |e| start + e);
+        from = end;
+        // `<inputs` のような別のタグは飛ばす
+        if !lower[start..].starts_with(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>') {
+            continue;
+        }
+        let attrs = parse_attributes(&html[start..end]);
+        let attr = |name: &str| {
+            attrs
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| *v)
+        };
+        if attr("id") == Some("tk") {
+            return attr("value").filter(|v| !v.is_empty()).map(str::to_string);
+        }
+    }
+    None
+}
+
+/// タグの中身（タグ名の後ろから `>` の手前まで）を `(属性名, 値)` に分ける。値のない属性は空文字列。
+fn parse_attributes(s: &str) -> Vec<(&str, &str)> {
+    let mut attrs = Vec::new();
+    let mut rest = s;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+        if rest.is_empty() {
+            return attrs;
+        }
+        let name_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '/')
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        rest = rest[name_end..].trim_start();
+        let Some(after_eq) = rest.strip_prefix('=') else {
+            attrs.push((name, ""));
+            continue;
+        };
+        rest = after_eq.trim_start();
+        let value;
+        if let Some(q) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') {
+            let body = &rest[1..];
+            let close = body.find(q).unwrap_or(body.len());
+            value = &body[..close];
+            rest = body.get(close + 1..).unwrap_or("");
+        } else {
+            let end = rest
+                .find(|c: char| c.is_ascii_whitespace())
+                .unwrap_or(rest.len());
+            value = &rest[..end];
+            rest = &rest[end..];
+        }
+        attrs.push((name, value));
+    }
 }
 
 /// 応答本体を `path` に書き出す。先頭が ZIP のシグネチャでなければ書き出す前にエラーにする。
@@ -320,5 +374,65 @@ mod tests {
         assert_eq!(extract_token(html).as_deref(), Some("abc123"));
         assert_eq!(extract_token(r#"<input id="tk" value="">"#), None);
         assert_eq!(extract_token("<html></html>"), None);
+    }
+
+    #[test]
+    fn extracts_token_regardless_of_attribute_order_and_quotes() {
+        assert_eq!(
+            extract_token(r#"<input value="v1" id="tk">"#).as_deref(),
+            Some("v1")
+        );
+        assert_eq!(
+            extract_token("<input id='tk' value='v2'>").as_deref(),
+            Some("v2")
+        );
+        assert_eq!(
+            extract_token("<input id=tk value=v3>").as_deref(),
+            Some("v3")
+        );
+        assert_eq!(
+            extract_token(r#"<input id = "tk" value = "v4" />"#).as_deref(),
+            Some("v4")
+        );
+        assert_eq!(
+            extract_token("<input\n  type=\"hidden\"\n  id=\"tk\"\n  value=\"v5\">").as_deref(),
+            Some("v5")
+        );
+    }
+
+    #[test]
+    fn extracts_token_case_insensitively() {
+        assert_eq!(
+            extract_token(r#"<INPUT ID="tk" VALUE="v1">"#).as_deref(),
+            Some("v1")
+        );
+        assert_eq!(
+            extract_token(r#"<Input Id="tk" Value="v2">"#).as_deref(),
+            Some("v2")
+        );
+        // 値そのものは大文字小文字を区別して返す
+        assert_eq!(
+            extract_token(r#"<input id="tk" value="AbC">"#).as_deref(),
+            Some("AbC")
+        );
+    }
+
+    #[test]
+    fn skips_other_inputs_and_tags() {
+        let html = r#"
+            <input type="text" id="tkx" value="no">
+            <input type="hidden" name="tk" value="no">
+            <inputs id="tk" value="no">
+            <input type="hidden" disabled id="tk" value="yes" data-x='a>b'>
+        "#;
+        assert_eq!(extract_token(html).as_deref(), Some("yes"));
+        assert_eq!(extract_token(r#"<input id="tk">"#), None);
+        assert_eq!(extract_token(r#"<input id="tk" value"#), None);
+    }
+
+    #[test]
+    fn handles_multibyte_text() {
+        let html = r#"<p>ダウンロード</p><input id="tk" value="日本">"#;
+        assert_eq!(extract_token(html).as_deref(), Some("日本"));
     }
 }

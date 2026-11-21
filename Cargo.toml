@@ -1,6 +1,6 @@
 [package]
 name = "histdata"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Download FX historical data from HistData.com (Rust port of the Python histdata package)"
 license = "Apache-2.0"
@@ -11,10 +11,9 @@ keywords = ["forex", "fx", "histdata", "finance", "trading"]
 categories = ["finance", "api-bindings"]
 
 [dependencies]
-chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 futures-util = "0.3.34"
-reqwest = { version = "0.13.5", default-features = false, features = ["charset", "form", "http2", "rustls", "stream"] }
-scraper = "0.29.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["fs", "io-util", "sync", "time"] }
 tracing = "0.1.44"
