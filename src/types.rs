@@ -220,8 +220,22 @@ pub fn period_rule_at(time_frame: TimeFrame, year: i32, current_year: i32) -> Pe
 }
 
 pub(crate) fn current_year() -> i32 {
-    use chrono::Datelike;
-    chrono::Utc::now().year()
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    year_of_unix_days((secs / 86_400) as i64)
+}
+
+/// 1970-01-01 からの日数を UTC の年にする（Howard Hinnant の civil_from_days）。
+fn year_of_unix_days(days: i64) -> i32 {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let year = yoe + era * 400 + i64::from(mp >= 10);
+    year as i32
 }
 
 /// 1 回分のダウンロード指定。既定値は Python 版と同じく 1 分足・Generic ASCII。
@@ -307,6 +321,24 @@ mod tests {
     use super::*;
 
     const BASE: &str = "https://www.histdata.com";
+
+    #[test]
+    fn year_from_unix_days() {
+        assert_eq!(year_of_unix_days(0), 1970); // 1970-01-01
+        assert_eq!(year_of_unix_days(364), 1970); // 1970-12-31
+        assert_eq!(year_of_unix_days(365), 1971); // 1971-01-01
+        assert_eq!(year_of_unix_days(11_016), 2000); // 2000-02-29
+        assert_eq!(year_of_unix_days(11_322), 2000); // 2000-12-31
+        assert_eq!(year_of_unix_days(11_323), 2001); // 2001-01-01
+        assert_eq!(year_of_unix_days(20_453), 2025); // 2025-12-31
+        assert_eq!(year_of_unix_days(20_454), 2026); // 2026-01-01
+        assert_eq!(year_of_unix_days(-1), 1969); // 1969-12-31
+    }
+
+    #[test]
+    fn current_year_is_plausible() {
+        assert!((2025..2200).contains(&current_year()));
+    }
 
     #[test]
     fn file_name_yearly_and_monthly() {
